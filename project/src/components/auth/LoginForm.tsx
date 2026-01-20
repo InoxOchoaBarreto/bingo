@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { Mail, Lock, AlertCircle } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 
 interface LoginFormProps {
   onToggleForm: () => void;
@@ -9,6 +10,8 @@ interface LoginFormProps {
 
 export const LoginForm = ({ onToggleForm, onForgotPassword }: LoginFormProps) => {
   const { signIn } = useAuth();
+  const navigate = useNavigate();
+
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -21,8 +24,11 @@ export const LoginForm = ({ onToggleForm, onForgotPassword }: LoginFormProps) =>
 
     try {
       await signIn(email, password);
+
+      // ✅ Entró: mandar a la pantalla inicial de salas
+      navigate('/rooms', { replace: true });
     } catch (err: any) {
-      setError(err.message || 'Error al iniciar sesión');
+      setError(err?.message || 'Error al iniciar sesión');
     } finally {
       setLoading(false);
     }
