@@ -30,17 +30,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    // Carga inicial
     supabase.auth.getSession().then(({ data: { session } }) => {
-      (async () => {
-        setUser(session?.user ?? null);
-        if (session?.user) {
-          await loadProfile(session.user.id);
-        }
-        setLoading(false);
-      })();
-    });
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       (async () => {
         setUser(session?.user ?? null);
         if (session?.user) {
@@ -48,6 +39,22 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         } else {
           setProfile(null);
         }
+        setLoading(false);
+      })();
+    });
+
+    // Cambios de auth
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      (async () => {
+        setUser(session?.user ?? null);
+        if (session?.user) {
+          await loadProfile(session.user.id);
+        } else {
+          setProfile(null);
+        }
+        setLoading(false);
       })();
     });
 
@@ -61,15 +68,43 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       .eq('id', userId)
       .maybeSingle();
 
-    if (data) {
-      setProfile(data);
-    } else if (error) {
+    if (error) {
       console.error('Error loading profile:', error);
+      return;
+    }
+
+    if (data) {
+      setProfile(data as UserProfile);
+    } else {
+      // Si no existe, dejamos profile en null (puede crearse luego)
+      setProfile(null);
+    }
+  };
+
+  const ensureProfile = async (userId: string, fullName: string, phone?: string) => {
+    // Upsert: si existe lo actualiza, si no existe lo crea
+    const { error } = await supabase
+      .from('user_profiles')
+      .upsert(
+        {
+          id: userId,
+          full_name: fullName,
+          phone: phone || null,
+          role: 'player',
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'id' }
+      );
+
+    if (error) {
+      console.error('Error ensuring profile:', error);
+      throw error;
     }
   };
 
   const signUp = async (email: string, password: string, fullName: string, phone?: string) => {
-    const { data, error } = await supabase.auth.signUp({
+    // 1) Crear usuario
+    const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
       email,
       password,
       options: {
@@ -80,56 +115,48 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       },
     });
 
-    if (error) throw error;
+    if (signUpError) throw signUpError;
 
-    if (data.user) {
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      await loadProfile(data.user.id);
+    // 2) Asegurar sesión (si confirm email está ON o no devuelve session, hacemos login)
+    if (!signUpData.session) {
+      const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+
+      if (signInError) throw signInError;
+
+      const userId = signInData.user?.id;
+      if (userId) {
+        await ensureProfile(userId, fullName, phone);
+        await loadProfile(userId);
+      }
+      return;
+    }
+
+    // 3) Si ya hay sesión (confirm email OFF), asegurar perfil
+    const userId = signUpData.user?.id;
+    if (userId) {
+      await ensureProfile(userId, fullName, phone);
+      await loadProfile(userId);
     }
   };
 
   const signIn = async (email: string, password: string) => {
-    const { error } = await supabase.auth.signInWithPassword({
+    const { data, error } = await supabase.auth.signInWithPassword({
       email,
       password,
     });
 
     if (error) throw error;
+
+    const userId = data.user?.id;
+    if (userId) {
+      await loadProfile(userId);
+    }
   };
 
   const signOut = async () => {
     const { error } = await supabase.auth.signOut();
     if (error) throw error;
-  };
-
-  const resetPassword = async (email: string) => {
-    const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: `${window.location.origin}/reset-password`,
-    });
-
-    if (error) throw error;
-  };
-
-  const refreshProfile = async () => {
-    if (user) {
-      await loadProfile(user.id);
-    }
-  };
-
-  return (
-    <AuthContext.Provider
-      value={{
-        user,
-        profile,
-        loading,
-        signUp,
-        signIn,
-        signOut,
-        resetPassword,
-        refreshProfile,
-      }}
-    >
-      {children}
-    </AuthContext.Provider>
-  );
-};
+    setProfile(null);
